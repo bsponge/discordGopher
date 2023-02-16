@@ -66,14 +66,14 @@ func (c *Client) Start() error {
 
 	c.gatewayWebsocket = ws
 
-	go c.pollMessages()
+	go c.poolMessages()
 
 	log.Logger().Infof("Gateway URL %s", gatewayURL)
 
 	return nil
 }
 
-func (c *Client) pollMessages() {
+func (c *Client) poolMessages() {
 	for {
 		_, body, err := c.gatewayWebsocket.Read(c.ctx)
 		if err == context.Canceled {
