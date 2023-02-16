@@ -84,7 +84,23 @@ func (c *Client) poolMessages() {
 			continue
 		}
 
-		log.Logger().Info(string(body))
+		log.Logger().Trace(string(body))
+
+		op := fastjson.GetInt(body, "op")
+
+		resp, err := fastjson.ParseBytes(body)
+		if err != nil {
+			log.Logger().WithError(err).Error("Could not parse json received from gateway wss")
+			return
+		}
+
+		switch op {
+		case 10: // Hello
+			heartbeatInterval := resp.Get("d").GetInt("heartbeat_interval")
+			log.Logger().Tracef("Heartbeat interval: %d", heartbeatInterval)
+		default:
+			log.Logger().Trace("Unknown op code")
+		}
 	}
 }
 

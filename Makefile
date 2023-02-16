@@ -1,3 +1,3 @@
 .PHONY: build
 build:
-	go build -o discord-gopher ./cmd/discord-gopher 
+	go build -o bin/discord-gopher ./cmd/discord-gopher 
