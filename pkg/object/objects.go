@@ -1,5 +1,7 @@
 package object
 
+import "nhooyr.io/websocket"
+
 type GuildFeature string
 type Dispatch string
 type ChannelType int
@@ -32,9 +34,11 @@ const (
 	VIPRegions                            GuildFeature = "VIP_REGIONS"
 	WelcomeScreenEnabled                  GuildFeature = "WELCOME_SCREEN_ENABLED"
 
-	ReadyType     Dispatch = "READY"
-	GuildCreate   Dispatch = "GUILD_CREATE"
-	MessageCreate Dispatch = "MESSAGE_CREATE"
+	ReadyType             Dispatch = "READY"
+	GuildCreateType       Dispatch = "GUILD_CREATE"
+	MessageCreateType     Dispatch = "MESSAGE_CREATE"
+	VoiceStateUpdateType  Dispatch = "VOICE_STATE_UPDATE"
+	VoiceServerUpdateType Dispatch = "VOICE_SERVER_UPDATE"
 
 	GuildText         ChannelType = 0
 	DM                ChannelType = 1
@@ -57,6 +61,7 @@ const (
 	InvalidAPIVersion    int = 4012
 	InvalidIntent        int = 4013
 	DisallowedIntent     int = 4014
+	StatusNormalClosure  int = int(websocket.StatusNormalClosure)
 )
 
 var ReconnectOnError map[int]bool = map[int]bool{
@@ -74,6 +79,7 @@ var ReconnectOnError map[int]bool = map[int]bool{
 	InvalidAPIVersion:    false,
 	InvalidIntent:        false,
 	DisallowedIntent:     false,
+	StatusNormalClosure:  true,
 }
 
 type Event[T any] struct {
@@ -96,13 +102,48 @@ type Identify struct {
 	Intents    int            `json:"intents"`
 }
 
+type VoiceIdentify struct {
+	ServerID  string `json:"server_id"`
+	UserID    string `json:"user_id"`
+	SessionID string `json:"session_id"`
+	Token     string `json:"token"`
+}
+
+type VoiceState struct {
+	GuildID   *string `json:"guild_id,omitempty"`
+	ChannelID *string `json:"channel_id,omitempty"`
+	UserID    string  `json:"user_id"`
+	SessionID string  `json:"session_id"`
+	SelfMute  *bool   `json:"self_mute,omitempty"`
+	SelfDeaf  *bool   `json:"self_deaf,omitempty"`
+}
+
+type Message struct {
+	ID              string  `json:"id"`
+	ChannelID       string  `json:"channel_id"`
+	Author          *User   `json:"author,omitempty"`
+	Content         *string `json:"content,omitempty"`
+	Timestamp       string  `json:"timestamp"`
+	EditedTimestamp *string `json:"edited_timestamp,omitempty"`
+	TTS             bool    `json:"tts"`
+	MentionEveryone bool    `json:"mention_everyone"`
+	Mentions        []User  `json:"mentions"`
+}
+
 type Ready struct {
 	V                int          `json:"v"`
 	User             *User        `json:"user"`
 	SessionID        string       `json:"session_id"`
+	Guilds           []Guild      `json:"guilds"`
 	ResumeGatewayURL string       `json:"resume_gateway_url"`
 	Shard            *[2]int      `json:"shard,omitempty"`
 	Application      *Application `json:"application"`
+}
+
+type VoiceServerUpdate struct {
+	Token    string `json:"token"`
+	GuildID  string `json:"guild_id"`
+	Endpoint string `json:"endpoint"`
 }
 
 type Application struct {
@@ -210,6 +251,7 @@ type Guild struct {
 	NSFWLevel                   int            `json:"nsfw_level"`
 	Stickers                    *[]Sticker     `json:"stickers,omitempty"`
 	PremiumProgressBarEnabled   bool           `json:"premium_progress_bar_enabled"`
+	VoiceStates                 *[]VoiceState  `json:"voice_states,omitempty"`
 }
 
 type Channel struct {

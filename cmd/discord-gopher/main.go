@@ -15,13 +15,13 @@ func main() {
 
 	log.Logger().Info("Hello")
 
-	c, err := client.NewClient(ctx)
+	c, err := client.NewClient()
 	if err != nil {
 		log.Logger().WithError(err).Error("Failed to create the client")
 		return
 	}
 
-	err = c.Start()
+	err = c.Start(ctx)
 	if err != nil {
 		log.Logger().WithError(err).Error("Failed to start the client")
 		return

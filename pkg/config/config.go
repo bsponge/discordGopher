@@ -13,8 +13,8 @@ type Config struct {
 	ServerID     string `yaml:"server-id"`
 	Token        string `yaml:"token"`
 	ClientID     string `yaml:"client-id"`
+	Permissions  string `yaml:"permissions"`
 	ClientSecret string `yaml:"client-secret"`
-	OAuthURL     string `yaml:"oauth-url"`
 	RedirectURL  string `yaml:"redirect-url"`
 }
 
@@ -34,12 +34,20 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("could not unmarshal config file: %w", err)
 	}
 
-	if cfg.ServerID == "" {
-		return nil, fmt.Errorf("server-id cannot be empty")
+	if cfg.Token == "" {
+		return nil, fmt.Errorf("token field cannot be empty")
 	}
 
-	if cfg.Token == "" {
-		return nil, fmt.Errorf("token cannot be empty")
+	if cfg.ClientID == "" {
+		return nil, fmt.Errorf("client-id field cannot be empty")
+	}
+
+	if cfg.Permissions == "" {
+		return nil, fmt.Errorf("permissions field cannot be empty")
+	}
+
+	if cfg.RedirectURL == "" {
+		return nil, fmt.Errorf("redirect-url field cannot be empty")
 	}
 
 	return &cfg, nil

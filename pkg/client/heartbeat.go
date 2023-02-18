@@ -26,10 +26,8 @@ type SequenceGetter interface {
 	GetSequence() int
 }
 
-func NewHeartbeatService(ctx context.Context, client *Client) *heartbeatService {
+func NewHeartbeatService(client *Client) *heartbeatService {
 	return &heartbeatService{
-		ctx:    ctx,
-		closed: make(chan struct{}),
 		client: client,
 	}
 }
@@ -50,7 +48,10 @@ func (s *heartbeatService) SendHeartbeat(gatewayWebsocket *websocket.Conn) error
 	return nil
 }
 
-func (s *heartbeatService) Start(gatewayWebsocket *websocket.Conn, interval int, resuming bool) error {
+func (s *heartbeatService) Start(ctx context.Context, gatewayWebsocket *websocket.Conn, interval int, resuming bool) error {
+	s.ctx = ctx
+	s.closed = make(chan struct{})
+
 	timer := time.NewTicker(time.Duration(interval) * time.Millisecond)
 
 	err := s.SendHeartbeat(gatewayWebsocket)

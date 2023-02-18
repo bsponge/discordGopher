@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/bsponge/discordGopher/pkg/config"
@@ -27,13 +29,19 @@ const (
 	apiVersionValue = "10"
 	encodingValue   = "json"
 
-	tokenURL    = "https://discord.com/api/oauth2/token"
-	apiEndpoint = "https://discord.com/api/v10"
+	tokenURL       = "https://discord.com/api/oauth2/token"
+	oauth2TokenURL = "https://discord.com/api/oauth2/token"
+	apiEndpoint    = "https://discord.com/api/v10"
+
+	playCommand = "play"
 )
 
+var mentionRegex = regexp.MustCompile("<@.*>")
+
 type Client struct {
-	ctx    context.Context
-	cancel context.CancelFunc
+	parentCtx context.Context
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	mtx sync.Mutex
 
@@ -44,36 +52,41 @@ type Client struct {
 	gatewayWebsocket *websocket.Conn
 	resumeGatewayURL *url.URL
 	sessionID        string
+	guildID          string
+	userID           string
 
 	hbService *heartbeatService
+
+	voiceStates                  map[string]object.VoiceState
+	voiceServerInformationWaitCh chan struct{}
+
+	voiceClient *voiceClient
 
 	guild *object.Guild
 }
 
-func NewClient(ctx context.Context) (*Client, error) {
+func NewClient() (*Client, error) {
 	cfg, err := config.LoadConfig("")
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-
 	client := &Client{
-		ctx:    ctx,
-		cancel: cancel,
-		cfg:    cfg,
+		cfg: cfg,
 	}
 
-	hbService := NewHeartbeatService(ctx, client)
+	hbService := NewHeartbeatService(client)
 	client.hbService = hbService
 
 	return client, nil
 }
 
-func (c *Client) Start() error {
+func (c *Client) Start(ctx context.Context) error {
+	c.parentCtx = ctx
+
 	log.Logger().Info("Starting the client")
 
-	if err := c.start(false); err != nil {
+	if err := c.start(ctx, false); err != nil {
 		return err
 	}
 
@@ -82,7 +95,11 @@ func (c *Client) Start() error {
 	return nil
 }
 
-func (c *Client) start(reconnecting bool) error {
+func (c *Client) start(ctx context.Context, reconnecting bool) error {
+	c.ctx, c.cancel = context.WithCancel(ctx)
+
+	c.voiceStates = make(map[string]object.VoiceState)
+
 	gatewayURL, err := c.getGatewayURL()
 	if err != nil {
 		return err
@@ -133,10 +150,9 @@ func (c *Client) setSequence(sequence int) {
 }
 
 func (c *Client) poolMessages(resuming bool) {
-	var closeError websocket.CloseError
-
 	for {
 		_, body, err := c.gatewayWebsocket.Read(c.ctx)
+		var closeError websocket.CloseError
 		switch {
 		case errors.As(err, &closeError):
 			log.Logger().WithError(err).Error("The websocket connection was closed")
@@ -147,11 +163,9 @@ func (c *Client) poolMessages(resuming bool) {
 
 			c.resumeConnection()
 			return
-		case errors.Is(err, context.Canceled):
-			return
 		case err != nil:
 			log.Logger().WithError(err).Error("Could not read message from gateway wss")
-			continue
+			return
 		default:
 		}
 
@@ -187,7 +201,7 @@ func (c *Client) poolMessages(resuming bool) {
 			}
 		case 10: // Hello
 			heartbeatInterval := resp.Get("d").GetInt("heartbeat_interval")
-			err := c.hbService.Start(c.gatewayWebsocket, heartbeatInterval, resuming)
+			err := c.hbService.Start(c.ctx, c.gatewayWebsocket, heartbeatInterval, resuming)
 			if err != nil {
 				log.Logger().WithError(err).Error("Could not send first heartbeat")
 				return
@@ -203,29 +217,127 @@ func (c *Client) poolMessages(resuming bool) {
 func (c *Client) handleDispatch(dispatch object.Dispatch, payload []byte) error {
 	switch dispatch {
 	case object.ReadyType:
-		var ready object.Ready
-		err := json.Unmarshal(payload, &ready)
-		if err != nil {
-			return err
-		}
-
-		resumeURL, err := url.Parse(ready.ResumeGatewayURL)
-		if err != nil {
-			return err
-		}
-
-		c.resumeGatewayURL = resumeURL
-		c.sessionID = ready.SessionID
-	case object.GuildCreate:
-		var guild object.Guild
-		err := json.Unmarshal(payload, &guild)
-		if err != nil {
-			return err
-		}
-
-		c.setGuild(&guild)
+		return c.handleReady(payload)
+	case object.GuildCreateType:
+		return c.handleGuildCreate(payload)
+	case object.MessageCreateType:
+		return c.handleMessageCreate(payload)
+	case object.VoiceStateUpdateType:
+		return c.handleVoiceStateUpdate(payload)
+	case object.VoiceServerUpdateType:
+		return c.handleVoiceServerUpdate(payload)
 	default:
-		log.Logger().Warn("Received unknown dispatch")
+		log.Logger().WithField("dispatch_type", dispatch).Warn("Received unknown dispatch")
+	}
+
+	return nil
+}
+
+func (c *Client) handleReady(payload []byte) error {
+	var ready object.Ready
+	err := json.Unmarshal(payload, &ready)
+	if err != nil {
+		return err
+	}
+
+	resumeURL, err := url.Parse(ready.ResumeGatewayURL)
+	if err != nil {
+		return err
+	}
+
+	c.resumeGatewayURL = resumeURL
+	c.sessionID = ready.SessionID
+	c.guildID = ready.Guilds[0].ID
+	c.userID = ready.User.ID
+
+	return nil
+}
+
+func (c *Client) handleGuildCreate(payload []byte) error {
+	var guild object.Guild
+	err := json.Unmarshal(payload, &guild)
+	if err != nil {
+		return err
+	}
+
+	c.setGuild(&guild)
+	if guild.VoiceStates != nil {
+		for _, voiceState := range *guild.VoiceStates {
+			c.voiceStates[voiceState.UserID] = voiceState
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) handleMessageCreate(payload []byte) error {
+	var message object.Message
+	err := json.Unmarshal(payload, &message)
+	if err != nil {
+		return err
+	}
+
+	if message.Content != nil {
+		content := mentionRegex.ReplaceAllString(*message.Content, "")
+		words := strings.Split(content, " ")
+		var filteredWords []string
+
+		for _, word := range words {
+			word = strings.TrimSpace(word)
+			if word == "" {
+				continue
+			}
+
+			filteredWords = append(filteredWords, strings.ToLower(word))
+		}
+
+		if len(filteredWords) == 0 {
+			return nil
+		}
+
+		command := filteredWords[0]
+
+		switch command {
+		case playCommand:
+			c.voiceClient = NewVoiceClient(c.ctx, c)
+
+			voiceState, ok := c.voiceStates[message.Author.ID]
+			if !ok {
+				return fmt.Errorf("could not find voice state information for user %s", message.Author.Username)
+			}
+
+			log.Logger().Info("VOICESTATE ", voiceState)
+
+			c.voiceClient.ConnectToVoiceChannel(c.guildID, *voiceState.ChannelID, false, false)
+		default:
+			log.Logger().WithField("command", command).WithField("user", message.Author.Username).Info("User used unknown command")
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) handleVoiceStateUpdate(payload []byte) error {
+	var voiceState object.VoiceState
+	err := json.Unmarshal(payload, &voiceState)
+	if err != nil {
+		return err
+	}
+
+	c.voiceStates[voiceState.UserID] = voiceState
+
+	if voiceState.UserID == c.userID {
+		c.voiceServerInformationWaitCh <- struct{}{}
+	}
+
+	return nil
+}
+
+func (c *Client) handleVoiceServerUpdate(payload []byte) error {
+	var voiceServerUpdate object.VoiceServerUpdate
+	err := json.Unmarshal(payload, &voiceServerUpdate)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -233,7 +345,11 @@ func (c *Client) handleDispatch(dispatch object.Dispatch, payload []byte) error 
 
 func (c *Client) resumeConnection() {
 	c.Stop()
-	err := c.start(true)
+	c.ctx, c.cancel = context.WithCancel(c.parentCtx)
+
+	log.Logger().Info("Reconnecting...")
+
+	err := c.start(c.ctx, true)
 	if err != nil {
 		log.Logger().WithError(err).Error("Could not resume connection")
 	}
@@ -254,23 +370,29 @@ func (c *Client) setGuild(guild *object.Guild) {
 }
 
 func (c *Client) Identify() error {
+	var intent int = 1         // GUILDS
+	intent = intent | (1 << 1) // GUILD_MEMBERS
+	intent = intent | (1 << 7) // GUILD_VOICE_STATES
+	intent = intent | (1 << 8) // GUILD_PRESENCES
+	intent = intent | (1 << 9) // GUILD_MESSAGES
+
 	identify := object.Identify{
 		Token: c.cfg.Token,
 		Properties: map[string]any{
 			"os":      runtime.GOOS,
-			"browser": "disco",
-			"device":  "disco",
+			"browser": "discordGopher",
+			"device":  "discordGopher",
 		},
 		Compress: false,
-		Intents:  513, // TODO: what should go there?
+		Intents:  intent,
 	}
 
-	e := object.Event[object.Identify]{
+	event := object.Event[object.Identify]{
 		Op: 2,
 		D:  identify,
 	}
 
-	err := wsjson.Write(c.ctx, c.gatewayWebsocket, &e)
+	err := wsjson.Write(c.ctx, c.gatewayWebsocket, event)
 	if err != nil {
 		return err
 	}
@@ -295,6 +417,7 @@ func (c *Client) getGatewayURL() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
