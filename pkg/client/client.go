@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/bsponge/discordGopher/pkg/config"
-	"github.com/bsponge/discordGopher/pkg/errors"
 	"github.com/bsponge/discordGopher/pkg/log"
 	"github.com/bsponge/discordGopher/pkg/object"
 
@@ -45,6 +45,8 @@ type Client struct {
 	resumeGatewayURL *url.URL
 
 	hbService *heartbeatService
+
+	guild *object.Guild
 }
 
 func NewClient(ctx context.Context) (*Client, error) {
@@ -94,25 +96,39 @@ func (c *Client) Start() error {
 func (c *Client) GetSequence() int {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
+
 	return c.sequence
 }
 
 func (c *Client) setSequence(sequence int) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
+
 	c.sequence = sequence
 }
 
 func (c *Client) poolMessages() {
+	var closeError websocket.CloseError
+
 	for {
 		_, body, err := c.gatewayWebsocket.Read(c.ctx)
-		unwraped := errors.BaseError(err)
-		if unwraped == context.Canceled {
+		switch {
+		case errors.As(err, &closeError):
+			log.Logger().WithError(err).Error("The websocket connection was closed")
+			shouldReconnect, ok := object.ReconnectOnError[int(closeError.Code)]
+			if !ok || !shouldReconnect {
+				return
+			}
+
+			c.Start()
+
 			return
-		}
-		if err != nil {
+		case errors.Is(err, context.Canceled):
+			return
+		case err != nil:
 			log.Logger().WithError(err).Error("Could not read message from gateway wss")
 			continue
+		default:
 		}
 
 		log.Logger().Trace(string(body))
@@ -170,12 +186,30 @@ func (c *Client) handleDispatch(dispatch object.Dispatch, payload []byte) error 
 			return err
 		}
 
-		log.Logger().Info("Unmarshaled GUILD ", guild)
+		c.setGuild(&guild)
 	default:
 		log.Logger().Warn("Received unknown dispatch")
 	}
 
 	return nil
+}
+
+func (c *Client) resumeConnection() error {
+	return nil
+}
+
+func (c *Client) getGuild() *object.Guild {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	return c.guild
+}
+
+func (c *Client) setGuild(guild *object.Guild) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	c.guild = guild
 }
 
 func (c *Client) setResumeGatewayURL(gatewayURL string) error {
@@ -257,8 +291,12 @@ func (c *Client) getGatewayURL() (string, error) {
 }
 
 func (c *Client) Stop() {
+	log.Logger().Info("Stopping the client")
+
 	c.gatewayWebsocket.Close(websocket.StatusInternalError, "")
 	c.cancel()
 
 	c.hbService.Stop()
+
+	log.Logger().Info("The client has stopped")
 }

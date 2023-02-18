@@ -26,6 +26,7 @@ func main() {
 		log.Logger().WithError(err).Error("Failed to start the client")
 		return
 	}
+	defer c.Stop()
 
 	<-ctx.Done()
 	log.Logger().Info("Main context canceled. Exiting...")

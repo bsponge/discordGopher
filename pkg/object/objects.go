@@ -2,6 +2,7 @@ package object
 
 type GuildFeature string
 type Dispatch string
+type ChannelType int
 
 const (
 	AnimatedBanner                        GuildFeature = "ANIMATED_BANNER"
@@ -33,7 +34,46 @@ const (
 
 	ReadyType   Dispatch = "READY"
 	GuildCreate Dispatch = "GUILD_CREATE"
+
+	GuildText         ChannelType = 0
+	DM                ChannelType = 1
+	GuildVoice        ChannelType = 2
+	GroupDM           ChannelType = 3
+	GuildCategory     ChannelType = 4
+	GuildAccouncement ChannelType = 5
+
+	UnknownError         int = 4000
+	UnknownOpcode        int = 4001
+	DecodeError          int = 4002
+	NotAuthenticated     int = 4003
+	AuthenticationFailed int = 4004
+	AlreadyAuthenticated int = 4005
+	InvalidSeq           int = 4007
+	RateLimited          int = 4008
+	SessionTimedOut      int = 4009
+	InvalidShard         int = 4010
+	ShardingRequired     int = 4011
+	InvalidAPIVersion    int = 4012
+	InvalidIntent        int = 4013
+	DisallowedIntent     int = 4014
 )
+
+var ReconnectOnError map[int]bool = map[int]bool{
+	UnknownError:         true,
+	UnknownOpcode:        true,
+	DecodeError:          true,
+	NotAuthenticated:     true,
+	AuthenticationFailed: false,
+	AlreadyAuthenticated: true,
+	InvalidSeq:           true,
+	RateLimited:          true,
+	SessionTimedOut:      true,
+	InvalidShard:         false,
+	ShardingRequired:     false,
+	InvalidAPIVersion:    false,
+	InvalidIntent:        false,
+	DisallowedIntent:     false,
+}
 
 type Event[T any] struct {
 	Op int     `json:"op"`
@@ -138,6 +178,8 @@ type Guild struct {
 	VerificationLevel           int            `json:"verification_level"`
 	DefaultMessageNotifications int            `json:"default_message_notifications"`
 	ExplicitContentFilter       int            `json:"explicit_content_filter"`
+	Members                     *[]Member      `json:"members,omitempty"`
+	Channels                    *[]Channel     `json:"channels,omitempty"`
 	Roles                       []Role         `json:"roles"`
 	Emojis                      []Emoji        `json:"emoji"`
 	Features                    []GuildFeature `json:"features"`
@@ -161,6 +203,16 @@ type Guild struct {
 	NSFWLevel                   int            `json:"nsfw_level"`
 	Stickers                    *[]Sticker     `json:"stickers,omitempty"`
 	PremiumProgressBarEnabled   bool           `json:"premium_progress_bar_enabled"`
+}
+
+type Channel struct {
+	ID        string  `json:"id"`
+	Type      int     `json:"type"`
+	GuildID   *string `json:"guild_id,omitempty"`
+	Position  *int    `json:"position,omitempty"`
+	Name      *string `json:"name,omitempty"`
+	Bitrate   *int    `json:"bitrate,omitempty"`
+	RTCRegion *string `json:"rtc_region,omitempty"`
 }
 
 type WelcomeScreen struct {

@@ -34,5 +34,13 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("could not unmarshal config file: %w", err)
 	}
 
+	if cfg.ServerID == "" {
+		return nil, fmt.Errorf("server-id cannot be empty")
+	}
+
+	if cfg.Token == "" {
+		return nil, fmt.Errorf("token cannot be empty")
+	}
+
 	return &cfg, nil
 }
