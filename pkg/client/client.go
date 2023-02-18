@@ -43,6 +43,7 @@ type Client struct {
 
 	gatewayWebsocket *websocket.Conn
 	resumeGatewayURL *url.URL
+	sessionID        string
 
 	hbService *heartbeatService
 
@@ -70,8 +71,18 @@ func NewClient(ctx context.Context) (*Client, error) {
 }
 
 func (c *Client) Start() error {
-	log.Logger().Trace("Starting the client...")
+	log.Logger().Info("Starting the client")
 
+	if err := c.start(false); err != nil {
+		return err
+	}
+
+	log.Logger().Info("The clietn has started successfully")
+
+	return nil
+}
+
+func (c *Client) start(reconnecting bool) error {
 	gatewayURL, err := c.getGatewayURL()
 	if err != nil {
 		return err
@@ -86,9 +97,23 @@ func (c *Client) Start() error {
 
 	c.gatewayWebsocket = ws
 
-	go c.poolMessages()
+	if reconnecting {
+		event := object.Event[object.Resume]{
+			Op: 6,
+			D: object.Resume{
+				Token:     c.cfg.Token,
+				SessionID: c.sessionID,
+				Sequence:  c.GetSequence(),
+			},
+		}
 
-	log.Logger().Trace("The client started successfully")
+		err := wsjson.Write(c.ctx, ws, event)
+		if err != nil {
+			return err
+		}
+	}
+
+	go c.poolMessages(reconnecting)
 
 	return nil
 }
@@ -107,7 +132,7 @@ func (c *Client) setSequence(sequence int) {
 	c.sequence = sequence
 }
 
-func (c *Client) poolMessages() {
+func (c *Client) poolMessages(resuming bool) {
 	var closeError websocket.CloseError
 
 	for {
@@ -120,8 +145,7 @@ func (c *Client) poolMessages() {
 				return
 			}
 
-			c.Start()
-
+			c.resumeConnection()
 			return
 		case errors.Is(err, context.Canceled):
 			return
@@ -153,10 +177,17 @@ func (c *Client) poolMessages() {
 			if err != nil {
 				log.Logger().WithError(err).Error("Could not send heartbeat after receiving op code 1")
 			}
+		case 7: // Reconnect
+			c.resumeConnection()
+			return
 		case 9: // Invalid session
+			if resp.GetBool("d") {
+				c.resumeConnection()
+				return
+			}
 		case 10: // Hello
 			heartbeatInterval := resp.Get("d").GetInt("heartbeat_interval")
-			err := c.hbService.Start(c.gatewayWebsocket, heartbeatInterval)
+			err := c.hbService.Start(c.gatewayWebsocket, heartbeatInterval, resuming)
 			if err != nil {
 				log.Logger().WithError(err).Error("Could not send first heartbeat")
 				return
@@ -178,7 +209,13 @@ func (c *Client) handleDispatch(dispatch object.Dispatch, payload []byte) error 
 			return err
 		}
 
-		c.setResumeGatewayURL(ready.ResumeGatewayURL)
+		resumeURL, err := url.Parse(ready.ResumeGatewayURL)
+		if err != nil {
+			return err
+		}
+
+		c.resumeGatewayURL = resumeURL
+		c.sessionID = ready.SessionID
 	case object.GuildCreate:
 		var guild object.Guild
 		err := json.Unmarshal(payload, &guild)
@@ -194,8 +231,12 @@ func (c *Client) handleDispatch(dispatch object.Dispatch, payload []byte) error 
 	return nil
 }
 
-func (c *Client) resumeConnection() error {
-	return nil
+func (c *Client) resumeConnection() {
+	c.Stop()
+	err := c.start(true)
+	if err != nil {
+		log.Logger().WithError(err).Error("Could not resume connection")
+	}
 }
 
 func (c *Client) getGuild() *object.Guild {
@@ -210,20 +251,6 @@ func (c *Client) setGuild(guild *object.Guild) {
 	defer c.mtx.Unlock()
 
 	c.guild = guild
-}
-
-func (c *Client) setResumeGatewayURL(gatewayURL string) error {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	parsedURL, err := url.Parse(gatewayURL)
-	if err != nil {
-		return err
-	}
-
-	c.resumeGatewayURL = parsedURL
-
-	return nil
 }
 
 func (c *Client) Identify() error {
@@ -253,6 +280,10 @@ func (c *Client) Identify() error {
 
 // getGateway gets gateway WSS URL which is used to listen for discord server events.
 func (c *Client) getGatewayURL() (string, error) {
+	if c.resumeGatewayURL != nil {
+		return c.resumeGatewayURL.String(), nil
+	}
+
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/gateway/bot", apiEndpoint), nil)
 	if err != nil {
 		return "", err

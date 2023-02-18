@@ -32,8 +32,9 @@ const (
 	VIPRegions                            GuildFeature = "VIP_REGIONS"
 	WelcomeScreenEnabled                  GuildFeature = "WELCOME_SCREEN_ENABLED"
 
-	ReadyType   Dispatch = "READY"
-	GuildCreate Dispatch = "GUILD_CREATE"
+	ReadyType     Dispatch = "READY"
+	GuildCreate   Dispatch = "GUILD_CREATE"
+	MessageCreate Dispatch = "MESSAGE_CREATE"
 
 	GuildText         ChannelType = 0
 	DM                ChannelType = 1
@@ -80,6 +81,12 @@ type Event[T any] struct {
 	D  T       `json:"d,omitempty"`
 	S  *int    `json:"s,omitempty"`
 	T  *string `json:"t,omitempty"`
+}
+
+type Resume struct {
+	Token     string `json:"token"`
+	SessionID string `json:"session_id"`
+	Sequence  int    `json:"seq"`
 }
 
 type Identify struct {

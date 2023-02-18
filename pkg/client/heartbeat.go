@@ -50,7 +50,7 @@ func (s *heartbeatService) SendHeartbeat(gatewayWebsocket *websocket.Conn) error
 	return nil
 }
 
-func (s *heartbeatService) Start(gatewayWebsocket *websocket.Conn, interval int) error {
+func (s *heartbeatService) Start(gatewayWebsocket *websocket.Conn, interval int, resuming bool) error {
 	timer := time.NewTicker(time.Duration(interval) * time.Millisecond)
 
 	err := s.SendHeartbeat(gatewayWebsocket)
@@ -58,9 +58,11 @@ func (s *heartbeatService) Start(gatewayWebsocket *websocket.Conn, interval int)
 		return err
 	}
 
-	err = s.client.Identify()
-	if err != nil {
-		return err
+	if !resuming {
+		err = s.client.Identify()
+		if err != nil {
+			return err
+		}
 	}
 
 	go func() {
